@@ -13,16 +13,19 @@ type RevokePrivilegeQueryBuilder interface {
 	WithDatabase(*string) RevokePrivilegeQueryBuilder
 	WithTable(*string) RevokePrivilegeQueryBuilder
 	WithColumn(*string) RevokePrivilegeQueryBuilder
+	WithAccessObject(*string) RevokePrivilegeQueryBuilder
 	WithCluster(*string) RevokePrivilegeQueryBuilder
 }
 
 type revokePrivilegeQueryBuilder struct {
-	accessType  string
-	from        string
-	database    *string
-	table       *string
-	column      *string
-	clusterName *string
+	accessType      string
+	from            string
+	database        *string
+	table           *string
+	column          *string
+	accessObject    *string
+	useAccessObject bool
+	clusterName     *string
 }
 
 func RevokePrivilege(accessType string, from string) RevokePrivilegeQueryBuilder {
@@ -52,6 +55,12 @@ func (q *revokePrivilegeQueryBuilder) WithCluster(clusterName *string) RevokePri
 	return q
 }
 
+func (q *revokePrivilegeQueryBuilder) WithAccessObject(accessObject *string) RevokePrivilegeQueryBuilder {
+	q.accessObject = accessObject
+	q.useAccessObject = true
+	return q
+}
+
 func (q *revokePrivilegeQueryBuilder) Build() (string, error) {
 	if q.accessType == "" {
 		return "", errors.New("AccessType cannot be empty")
@@ -75,11 +84,20 @@ func (q *revokePrivilegeQueryBuilder) Build() (string, error) {
 		tokens = append(tokens, q.accessType)
 	}
 
-	// Target database/table
+	// Target database/table or access object (user name, definer, etc.)
 	{
 		tokens = append(tokens, "ON")
 
-		if q.database != nil {
+		if q.useAccessObject {
+			if q.database != nil || q.table != nil || (q.column != nil && *q.column != "") {
+				return "", errors.New("database, table, and column must not be set when access object is used")
+			}
+			if q.accessObject == nil || *q.accessObject == "" || *q.accessObject == "*" {
+				tokens = append(tokens, "*")
+			} else {
+				tokens = append(tokens, accessObjectToken(*q.accessObject))
+			}
+		} else if q.database != nil {
 			if q.table != nil {
 				tokens = append(tokens, fmt.Sprintf("%s.%s", identifierOrPattern(*q.database), identifierOrPattern(*q.table)))
 			} else {

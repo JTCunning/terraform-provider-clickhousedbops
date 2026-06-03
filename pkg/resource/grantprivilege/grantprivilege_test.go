@@ -28,6 +28,53 @@ func TestGrantprivilege_acceptance(t *testing.T) {
 	clusterName := "cluster1"
 
 	grantsGroups := grantprivilege.ParseGrantsTSV(testGrantsTSV).Groups
+	grantsScopes := grantprivilege.ParseGrantsTSV(testGrantsTSV).Scopes
+
+	buildGrantPrivilege := func(accessType string, attrs map[string]string, grantOption bool) dbops.GrantPrivilege {
+		var database, table, column *string
+		if v := attrs["database_name"]; v != "" {
+			database = &v
+		}
+		if v := attrs["table_name"]; v != "" {
+			table = &v
+		}
+		if v := attrs["column_name"]; v != "" {
+			column = &v
+		}
+
+		var granteeUserName, granteeRoleName *string
+		if v := attrs["grantee_user_name"]; v != "" {
+			granteeUserName = &v
+		}
+		if v := attrs["grantee_role_name"]; v != "" {
+			granteeRoleName = &v
+		}
+
+		grant := dbops.GrantPrivilege{
+			AccessType:          accessType,
+			ExpandedAccessTypes: grantprivilege.AllDescendants(grantsGroups, accessType),
+			DatabaseName:        database,
+			TableName:           table,
+			ColumnName:          column,
+			GranteeUserName:     granteeUserName,
+			GranteeRoleName:     granteeRoleName,
+			GrantOption:         grantOption,
+		}
+
+		scope := grantsScopes[accessType]
+		switch scope {
+		case "USER_NAME", "DEFINER", "TABLE_ENGINE", "NAMED_COLLECTION":
+			grant.UsesAccessObject = true
+			for _, key := range []string{"user_name", "definer_name", "table_engine_name", "named_collection_name"} {
+				if v := attrs[key]; v != "" {
+					grant.AccessObject = v
+					break
+				}
+			}
+		}
+
+		return grant
+	}
 
 	granteeRoleResource := resourcebuilder.
 		New("clickhousedbops_role", granteeRoleName).
@@ -51,41 +98,7 @@ func TestGrantprivilege_acceptance(t *testing.T) {
 			return false, fmt.Errorf("both grantee_user_name and grantee_role_name attribute were not set")
 		}
 
-		var database *string
-		if attrs["database_name"] != "" {
-			s := attrs["database_name"]
-			database = &s
-		}
-
-		var table *string
-		if attrs["table_name"] != "" {
-			s := attrs["table_name"]
-			table = &s
-		}
-
-		var column *string
-		if attrs["column_name"] != "" {
-			s := attrs["column_name"]
-			column = &s
-		}
-
-		var granteeUserName, granteeRoleName *string
-		if granteeUser != "" {
-			granteeUserName = &granteeUser
-		}
-		if granteeRole != "" {
-			granteeRoleName = &granteeRole
-		}
-
-		grantPrivilege := dbops.GrantPrivilege{
-			AccessType:          accessType,
-			ExpandedAccessTypes: grantprivilege.AllDescendants(grantsGroups, accessType),
-			DatabaseName:        database,
-			TableName:           table,
-			ColumnName:          column,
-			GranteeUserName:     granteeUserName,
-			GranteeRoleName:     granteeRoleName,
-		}
+		grantPrivilege := buildGrantPrivilege(accessType, attrs, false)
 
 		grantprivilege, err := dbopsClient.GetGrantPrivilege(ctx, &grantPrivilege, clusterName)
 		return grantprivilege != nil, err
@@ -97,55 +110,29 @@ func TestGrantprivilege_acceptance(t *testing.T) {
 			return fmt.Errorf("privilege_name attribute was not set")
 		}
 
-		var database *string
-		if attrs["database_name"] != nil {
-			s := attrs["database_name"].(string)
-			database = &s
-		}
-
-		var table *string
-		if attrs["table_name"] != nil {
-			s := attrs["table_name"].(string)
-			table = &s
-		}
-
-		var column *string
-		if attrs["column_name"] != nil {
-			s := attrs["column_name"].(string)
-			column = &s
-		}
-
-		var granteeUserName, granteeRoleName *string
-		if attrs["grantee_user_name"] != nil {
-			s := attrs["grantee_user_name"].(string)
-			granteeUserName = &s
-		}
-
-		if attrs["grantee_role_name"] != nil {
-			s := attrs["grantee_role_name"].(string)
-			granteeRoleName = &s
-		}
-
-		if granteeUserName == nil && granteeRoleName == nil {
+		if stringAttr(attrs, "grantee_user_name") == "" && stringAttr(attrs, "grantee_role_name") == "" {
 			return fmt.Errorf("both grantee_user_name and grantee_role_name attribute were not set")
 		}
 
 		grantOption := false
 		if attrs["grant_option"] != nil {
-			s := attrs["grant_option"].(bool)
-			grantOption = s
+			grantOption = attrs["grant_option"].(bool)
 		}
 
-		grantPrivilege := dbops.GrantPrivilege{
-			AccessType:          accessType,
-			ExpandedAccessTypes: grantprivilege.AllDescendants(grantsGroups, accessType),
-			DatabaseName:        database,
-			TableName:           table,
-			ColumnName:          column,
-			GranteeUserName:     granteeUserName,
-			GranteeRoleName:     granteeRoleName,
-			GrantOption:         grantOption,
+		stringAttrs := map[string]string{
+			"privilege_name":        accessType,
+			"database_name":         stringAttr(attrs, "database_name"),
+			"table_name":            stringAttr(attrs, "table_name"),
+			"column_name":           stringAttr(attrs, "column_name"),
+			"user_name":             stringAttr(attrs, "user_name"),
+			"definer_name":          stringAttr(attrs, "definer_name"),
+			"table_engine_name":     stringAttr(attrs, "table_engine_name"),
+			"named_collection_name": stringAttr(attrs, "named_collection_name"),
+			"grantee_user_name":     stringAttr(attrs, "grantee_user_name"),
+			"grantee_role_name":     stringAttr(attrs, "grantee_role_name"),
 		}
+
+		grantPrivilege := buildGrantPrivilege(accessType, stringAttrs, grantOption)
 
 		grantprivilege, err := dbopsClient.GetGrantPrivilege(ctx, &grantPrivilege, clusterName)
 		if err != nil {
@@ -184,7 +171,7 @@ func TestGrantprivilege_acceptance(t *testing.T) {
 			return fmt.Errorf("wrong value for grantee_role_name attribute")
 		}
 
-		if grantprivilege.GrantOption != attrs["grant_option"].(bool) {
+		if grantprivilege.GrantOption != grantOption {
 			return fmt.Errorf("wrong value for grant_option attribute")
 		}
 
@@ -260,6 +247,50 @@ func TestGrantprivilege_acceptance(t *testing.T) {
 			Resource: resourcebuilder.New(resourceType, resourceName).
 				WithStringAttribute("privilege_name", "CREATE").
 				WithStringAttribute("database_name", "default").
+				WithResourceFieldReference("grantee_role_name", "clickhousedbops_role", granteeRoleName, "name").
+				AddDependency(granteeRoleResource.Build()).
+				Build(),
+			ResourceName:        resourceName,
+			ResourceAddress:     fmt.Sprintf("%s.%s", resourceType, resourceName),
+			CheckNotExistsFunc:  checkNotExistsFunc,
+			CheckAttributesFunc: checkAttributesFunc,
+		},
+		{
+			Name:     "Grant CREATE USER on all users to role using Native protocol on a single replica",
+			ChEnv:    map[string]string{"CONFIGFILE": "config-single.xml"},
+			Protocol: "native",
+			Resource: resourcebuilder.New(resourceType, resourceName).
+				WithStringAttribute("privilege_name", "CREATE USER").
+				WithResourceFieldReference("grantee_role_name", "clickhousedbops_role", granteeRoleName, "name").
+				AddDependency(granteeRoleResource.Build()).
+				Build(),
+			ResourceName:        resourceName,
+			ResourceAddress:     fmt.Sprintf("%s.%s", resourceType, resourceName),
+			CheckNotExistsFunc:  checkNotExistsFunc,
+			CheckAttributesFunc: checkAttributesFunc,
+		},
+		{
+			Name:     "Grant CREATE USER on user name pattern to role using Native protocol on a single replica",
+			ChEnv:    map[string]string{"CONFIGFILE": "config-single.xml"},
+			Protocol: "native",
+			Resource: resourcebuilder.New(resourceType, resourceName).
+				WithStringAttribute("privilege_name", "CREATE USER").
+				WithStringAttribute("user_name", "session-*").
+				WithResourceFieldReference("grantee_role_name", "clickhousedbops_role", granteeRoleName, "name").
+				AddDependency(granteeRoleResource.Build()).
+				Build(),
+			ResourceName:        resourceName,
+			ResourceAddress:     fmt.Sprintf("%s.%s", resourceType, resourceName),
+			CheckNotExistsFunc:  checkNotExistsFunc,
+			CheckAttributesFunc: checkAttributesFunc,
+		},
+		{
+			Name:     "Grant ALTER ROLE on role name to role using Native protocol on a single replica",
+			ChEnv:    map[string]string{"CONFIGFILE": "config-single.xml"},
+			Protocol: "native",
+			Resource: resourcebuilder.New(resourceType, resourceName).
+				WithStringAttribute("privilege_name", "ALTER ROLE").
+				WithStringAttribute("user_name", "app_role").
 				WithResourceFieldReference("grantee_role_name", "clickhousedbops_role", granteeRoleName, "name").
 				AddDependency(granteeRoleResource.Build()).
 				Build(),
@@ -541,4 +572,11 @@ func TestGrantprivilege_acceptance(t *testing.T) {
 	}
 
 	runner.RunTests(t, tests)
+}
+
+func stringAttr(attrs map[string]any, key string) string {
+	if attrs[key] == nil {
+		return ""
+	}
+	return attrs[key].(string)
 }

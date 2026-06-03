@@ -99,6 +99,18 @@ func overlaps(current GrantPrivilege, existing dbops.GrantPrivilege) bool {
 		}
 	}
 
+	// AccessObject (USER_NAME, DEFINER, TABLE_ENGINE, NAMED_COLLECTION scopes)
+	{
+		scope := parsedGrants().Scopes[current.Privilege.ValueString()]
+		if isGlobalWithParameterScope(scope) || (existing.DatabaseName == nil && existing.TableName == nil && existing.ColumnName == nil && existing.AccessObject != "") {
+			currentObject := accessObjectFromPlan(current)
+			existingObject := existing.AccessObject
+			if !accessObjectsOverlap(currentObject, existingObject) {
+				return false
+			}
+		}
+	}
+
 	// GranteeUserName
 	{
 		if !current.GranteeUserName.IsNull() && existing.GranteeUserName != nil && current.GranteeUserName.ValueString() != *existing.GranteeUserName {
@@ -159,4 +171,32 @@ func explainOverlap(current GrantPrivilege, existing dbops.GrantPrivilege) strin
 	}
 
 	return row
+}
+
+func accessObjectsOverlap(current, existing string) bool {
+	if current == existing {
+		return true
+	}
+	if current == "" {
+		return true
+	}
+	if existing == "" {
+		return true
+	}
+
+	if strings.HasSuffix(current, "*") {
+		if strings.HasSuffix(existing, "*") {
+			if !strings.HasPrefix(current, strings.TrimSuffix(existing, "*")) {
+				return false
+			}
+		} else {
+			return false
+		}
+	} else if strings.HasSuffix(existing, "*") {
+		// existing is a wildcard prefix pattern
+	} else {
+		return false
+	}
+
+	return true
 }

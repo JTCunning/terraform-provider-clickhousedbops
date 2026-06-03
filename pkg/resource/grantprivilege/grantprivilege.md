@@ -1,6 +1,15 @@
 You can use the `clickhousedbops_grant_privilege` resource to grant privileges on databases and tables to either a `clickhousedbops_user` or a `clickhousedbops_role`.
 
-Please note that in order to grant privileges to all database and/or all tables, the `database` and/or `table` fields must be set to null, and not to "*".
+Please note that in order to grant privileges to all database and/or all tables, the `database_name` and/or `table_name` fields must be set to null, and not to "*".
+
+Some privileges target a user, role, definer, table engine, or named collection instead of a database or table. Use the matching optional attribute and leave `database_name`, `table_name`, and `column_name` null:
+
+- `user_name` for privileges such as `CREATE USER`, `ALTER ROLE`, and `IMPERSONATE`
+- `definer_name` for `SET DEFINER`
+- `table_engine_name` for `TABLE ENGINE`
+- `named_collection_name` for named-collection privileges such as `NAMED COLLECTION ADMIN`
+
+Leave the matching attribute null to grant on all targets (`ON *`). Trailing `*` wildcards (for example `session-*`) are supported on these fields, same as on `database_name` and `table_name`.
 
 Known limitations:
 

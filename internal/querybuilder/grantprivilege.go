@@ -13,18 +13,21 @@ type GrantPrivilegeQueryBuilder interface {
 	WithDatabase(*string) GrantPrivilegeQueryBuilder
 	WithTable(*string) GrantPrivilegeQueryBuilder
 	WithColumn(*string) GrantPrivilegeQueryBuilder
+	WithAccessObject(*string) GrantPrivilegeQueryBuilder
 	WithGrantOption(bool) GrantPrivilegeQueryBuilder
 	WithCluster(*string) GrantPrivilegeQueryBuilder
 }
 
 type grantPrivilegeQueryBuilder struct {
-	accessType  string
-	to          string
-	database    *string
-	table       *string
-	column      *string
-	grantOption bool
-	clusterName *string
+	accessType      string
+	to              string
+	database        *string
+	table           *string
+	column          *string
+	accessObject    *string
+	useAccessObject bool
+	grantOption     bool
+	clusterName     *string
 }
 
 func GrantPrivilege(accessType string, to string) GrantPrivilegeQueryBuilder {
@@ -59,6 +62,12 @@ func (q *grantPrivilegeQueryBuilder) WithGrantOption(grantOption bool) GrantPriv
 	return q
 }
 
+func (q *grantPrivilegeQueryBuilder) WithAccessObject(accessObject *string) GrantPrivilegeQueryBuilder {
+	q.accessObject = accessObject
+	q.useAccessObject = true
+	return q
+}
+
 func (q *grantPrivilegeQueryBuilder) Build() (string, error) {
 	if q.accessType == "" {
 		return "", errors.New("AccessType cannot be empty")
@@ -82,11 +91,20 @@ func (q *grantPrivilegeQueryBuilder) Build() (string, error) {
 		tokens = append(tokens, q.accessType)
 	}
 
-	// Target database/table
+	// Target database/table or access object (user name, definer, etc.)
 	{
 		tokens = append(tokens, "ON")
 
-		if q.database != nil {
+		if q.useAccessObject {
+			if q.database != nil || q.table != nil || (q.column != nil && *q.column != "") {
+				return "", errors.New("database, table, and column must not be set when access object is used")
+			}
+			if q.accessObject == nil || *q.accessObject == "" || *q.accessObject == "*" {
+				tokens = append(tokens, "*")
+			} else {
+				tokens = append(tokens, accessObjectToken(*q.accessObject))
+			}
+		} else if q.database != nil {
 			if q.table != nil {
 				tokens = append(tokens, fmt.Sprintf("%s.%s", identifierOrPattern(*q.database), identifierOrPattern(*q.table)))
 			} else {

@@ -4,7 +4,10 @@ page_title: "clickhousedbops_grant_privilege Resource - clickhousedbops"
 subcategory: ""
 description: |-
   You can use the clickhousedbops_grant_privilege resource to grant privileges on databases and tables to either a clickhousedbops_user or a clickhousedbops_role.
-  Please note that in order to grant privileges to all database and/or all tables, the database and/or table fields must be set to null, and not to "*".
+  Please note that in order to grant privileges to all database and/or all tables, the database_name and/or table_name fields must be set to null, and not to "*".
+  Some privileges target a user, role, definer, table engine, or named collection instead of a database or table. Use the matching optional attribute and leave database_name, table_name, and column_name null:
+  user_name for privileges such as CREATE USER, ALTER ROLE, and IMPERSONATEdefiner_name for SET DEFINERtable_engine_name for TABLE ENGINEnamed_collection_name for named-collection privileges such as NAMED COLLECTION ADMIN
+  Leave the matching attribute null to grant on all targets (ON *). Trailing * wildcards (for example session-*) are supported on these fields, same as on database_name and table_name.
   Known limitations:
   Only a subset of privileges can be granted on ClickHouse cloud. For example the ALL privilege can't be granted. See https://clickhouse.com/docs/en/sql-reference/statements/grant#allIt's not possible to grant privileges using their alias name. The canonical name must be used.It's not possible to grant group of privileges. Please grant each member of the group individually instead.It's not possible to grant the same clickhousedbops_grant_privilege to both a clickhousedbops_user and a clickhousedbops_role using a single clickhousedbops_grant_privilege stanza. You can do that using two different stanzas, one with grantee_user_name and the other with grantee_role_name fields set.It's not possible to grant the same privilege (example 'SELECT') to multiple entities (for example tables) with a single stanza. You can do that my creating one stanza for each entity you want to grant privileges on.Importing clickhousedbops_grant_privilege resources into terraform is not supported.
 ---
@@ -13,7 +16,16 @@ description: |-
 
 You can use the `clickhousedbops_grant_privilege` resource to grant privileges on databases and tables to either a `clickhousedbops_user` or a `clickhousedbops_role`.
 
-Please note that in order to grant privileges to all database and/or all tables, the `database` and/or `table` fields must be set to null, and not to "*".
+Please note that in order to grant privileges to all database and/or all tables, the `database_name` and/or `table_name` fields must be set to null, and not to "*".
+
+Some privileges target a user, role, definer, table engine, or named collection instead of a database or table. Use the matching optional attribute and leave `database_name`, `table_name`, and `column_name` null:
+
+- `user_name` for privileges such as `CREATE USER`, `ALTER ROLE`, and `IMPERSONATE`
+- `definer_name` for `SET DEFINER`
+- `table_engine_name` for `TABLE ENGINE`
+- `named_collection_name` for named-collection privileges such as `NAMED COLLECTION ADMIN`
+
+Leave the matching attribute null to grant on all targets (`ON *`). Trailing `*` wildcards (for example `session-*`) are supported on these fields, same as on `database_name` and `table_name`.
 
 Known limitations:
 
@@ -27,13 +39,93 @@ Known limitations:
 ## Example Usage
 
 ```terraform
-resource "clickhousedbops_grant_privilege" "grant" {
+# Global privilege (ON *.*) granted to a role.
+resource "clickhousedbops_grant_privilege" "show_users_to_role" {
+  privilege_name    = "SHOW USERS"
+  grantee_role_name = "my_role"
+}
+
+# Database-level privilege (ON db.*) granted to a user, with grant option.
+resource "clickhousedbops_grant_privilege" "create_table_on_db" {
+  privilege_name    = "CREATE TABLE"
+  database_name     = "default"
+  grantee_user_name = "my_user"
+  grant_option      = true
+}
+
+# Wildcard database (ON prefix_*.*) granted to a role.
+resource "clickhousedbops_grant_privilege" "select_on_prefix_dbs" {
+  privilege_name    = "SELECT"
+  database_name     = "analytics_*"
+  grantee_role_name = "analyst"
+}
+
+# Table-level privilege.
+resource "clickhousedbops_grant_privilege" "select_on_table" {
+  privilege_name    = "SELECT"
+  database_name     = "default"
+  table_name        = "events"
+  grantee_user_name = "my_user"
+}
+
+# Column-level privilege.
+resource "clickhousedbops_grant_privilege" "select_on_column" {
   privilege_name    = "SELECT"
   database_name     = "default"
   table_name        = "tbl1"
   column_name       = "count"
   grantee_user_name = "my_user_name"
   grant_option      = true
+}
+
+# Privilege scoped to a specific cluster (self-hosted, non-replicated user_directory).
+resource "clickhousedbops_grant_privilege" "select_on_cluster" {
+  cluster_name      = "my_cluster"
+  privilege_name    = "SELECT"
+  database_name     = "default"
+  table_name        = "events"
+  grantee_user_name = "my_user"
+}
+
+# USER_NAME-scope grant: any user or role (ON *).
+resource "clickhousedbops_grant_privilege" "create_user_any" {
+  privilege_name    = "CREATE USER"
+  grantee_role_name = "user_admin"
+}
+
+# USER_NAME-scope grant restricted by name pattern.
+resource "clickhousedbops_grant_privilege" "create_user_session" {
+  privilege_name    = "CREATE USER"
+  user_name         = "session-*"
+  grantee_role_name = "session_admin"
+}
+
+# USER_NAME-scope grant on a specific role name.
+resource "clickhousedbops_grant_privilege" "alter_role_app" {
+  privilege_name    = "ALTER ROLE"
+  user_name         = "app_role"
+  grantee_role_name = "app_admin"
+}
+
+# DEFINER-scope grant.
+resource "clickhousedbops_grant_privilege" "set_definer" {
+  privilege_name    = "SET DEFINER"
+  definer_name      = "etl_user"
+  grantee_role_name = "etl_admin"
+}
+
+# TABLE_ENGINE-scope grant.
+resource "clickhousedbops_grant_privilege" "table_engine_mergetree" {
+  privilege_name    = "TABLE ENGINE"
+  table_engine_name = "MergeTree"
+  grantee_user_name = "my_user"
+}
+
+# NAMED_COLLECTION-scope grant.
+resource "clickhousedbops_grant_privilege" "named_collection_admin" {
+  privilege_name        = "NAMED COLLECTION ADMIN"
+  named_collection_name = "s3_credentials"
+  grantee_role_name     = "s3_admin"
 }
 ```
 
@@ -51,7 +143,11 @@ This field must be left null when using a ClickHouse Cloud cluster.
 When using a self hosted ClickHouse instance, this field should only be set when there is more than one replica and you are not using 'replicated' storage for user_directory.
 - `column_name` (String) The name of the column in `table_name` to grant privilege on.
 - `database_name` (String) The name of the database to grant privilege on. Defaults to all databases if left null
+- `definer_name` (String) Target definer name for `SET DEFINER` privileges. Defaults to all definers if left null.
 - `grant_option` (Boolean) If true, the grantee will be able to grant the same privileges to others.
 - `grantee_role_name` (String) Name of the `role` to grant privileges to.
 - `grantee_user_name` (String) Name of the `user` to grant privileges to.
+- `named_collection_name` (String) Target named collection for NAMED_COLLECTION-scope privileges. Defaults to all named collections if left null.
+- `table_engine_name` (String) Target table engine for `TABLE ENGINE` privileges. Defaults to all table engines if left null.
 - `table_name` (String) The name of the table to grant privilege on.
+- `user_name` (String) Target user or role name for USER_NAME-scope privileges such as `CREATE USER` and `ALTER ROLE`. Defaults to all users and roles if left null.

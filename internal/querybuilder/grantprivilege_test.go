@@ -65,6 +65,30 @@ func Test_grantPrivilegeQueryBuilder(t *testing.T) {
 			want:    "",
 			wantErr: true,
 		},
+		{
+			name:    "Create user on all users",
+			builder: GrantPrivilege("CREATE USER", "admin").WithAccessObject(nil),
+			want:    "GRANT CREATE USER ON * TO `admin`;",
+			wantErr: false,
+		},
+		{
+			name:    "Create user on named user",
+			builder: GrantPrivilege("CREATE USER", "admin").WithAccessObject(strptr("session-user")),
+			want:    "GRANT CREATE USER ON `session-user` TO `admin`;",
+			wantErr: false,
+		},
+		{
+			name:    "Create user on user name pattern",
+			builder: GrantPrivilege("CREATE USER", "admin").WithAccessObject(strptr("session-*")),
+			want:    "GRANT CREATE USER ON `session-*` TO `admin`;",
+			wantErr: false,
+		},
+		{
+			name:    "Access object with database",
+			builder: GrantPrivilege("CREATE USER", "admin").WithAccessObject(strptr("session-*")).WithDatabase(strptr("default")),
+			want:    "",
+			wantErr: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -48,3 +48,34 @@ func identifierOrPattern(s string) string {
 	}
 	return backtick(s)
 }
+
+// accessObjectToken returns the ON-clause token for global-with-parameter grants.
+// Unlike database/table wildcards, access object patterns may contain characters such
+// as '-' that must be quoted even when using a trailing '*' suffix.
+func accessObjectToken(s string) string {
+	if s == "*" {
+		return s
+	}
+
+	if strings.HasSuffix(s, "*") && strings.Count(s, "*") == 1 && !strings.HasPrefix(s, "*") {
+		prefix := strings.TrimSuffix(s, "*")
+		if isSimpleIdentifier(prefix) {
+			return s
+		}
+	}
+
+	return backtick(s)
+}
+
+func isSimpleIdentifier(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' {
+			continue
+		}
+		return false
+	}
+	return true
+}

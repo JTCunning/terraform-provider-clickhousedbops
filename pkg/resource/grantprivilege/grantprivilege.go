@@ -62,6 +62,18 @@ func (r *Resource) Schema(_ context.Context, _ resource.SchemaRequest, resp *res
 		validPrivileges = append(validPrivileges, groupName)
 	}
 
+	accessObjectFields := path.Expressions{
+		path.MatchRoot("user_name"),
+		path.MatchRoot("definer_name"),
+		path.MatchRoot("table_engine_name"),
+		path.MatchRoot("named_collection_name"),
+	}
+	dbTableColumnFields := path.Expressions{
+		path.MatchRoot("database_name"),
+		path.MatchRoot("table_name"),
+		path.MatchRoot("column_name"),
+	}
+
 	resp.Schema = schema.Schema{
 		Attributes: map[string]schema.Attribute{
 			"cluster_name": schema.StringAttribute{
@@ -90,6 +102,7 @@ func (r *Resource) Schema(_ context.Context, _ resource.SchemaRequest, resp *res
 				Validators: []validator.String{
 					stringvalidator.LengthAtLeast(1),
 					stringvalidator.NoneOf("*"),
+					stringvalidator.ConflictsWith(append(accessObjectFields, path.MatchRoot("table_name"), path.MatchRoot("column_name"))...),
 				},
 			},
 			"table_name": schema.StringAttribute{
@@ -101,6 +114,7 @@ func (r *Resource) Schema(_ context.Context, _ resource.SchemaRequest, resp *res
 				Validators: []validator.String{
 					stringvalidator.LengthAtLeast(1),
 					stringvalidator.NoneOf("*"),
+					stringvalidator.ConflictsWith(accessObjectFields...),
 				},
 			},
 			"column_name": schema.StringAttribute{
@@ -112,6 +126,71 @@ func (r *Resource) Schema(_ context.Context, _ resource.SchemaRequest, resp *res
 				Validators: []validator.String{
 					stringvalidator.LengthAtLeast(1),
 					stringvalidator.AlsoRequires(path.Expressions{path.MatchRoot("table_name")}...),
+					stringvalidator.ConflictsWith(accessObjectFields...),
+				},
+			},
+			"user_name": schema.StringAttribute{
+				Optional:    true,
+				Description: "Target user or role name for USER_NAME-scope privileges such as `CREATE USER` and `ALTER ROLE`. Defaults to all users and roles if left null.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
+				Validators: []validator.String{
+					stringvalidator.LengthAtLeast(1),
+					stringvalidator.NoneOf("*"),
+					stringvalidator.ConflictsWith(append(dbTableColumnFields,
+						path.MatchRoot("definer_name"),
+						path.MatchRoot("table_engine_name"),
+						path.MatchRoot("named_collection_name"),
+					)...),
+				},
+			},
+			"definer_name": schema.StringAttribute{
+				Optional:    true,
+				Description: "Target definer name for `SET DEFINER` privileges. Defaults to all definers if left null.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
+				Validators: []validator.String{
+					stringvalidator.LengthAtLeast(1),
+					stringvalidator.NoneOf("*"),
+					stringvalidator.ConflictsWith(append(dbTableColumnFields,
+						path.MatchRoot("user_name"),
+						path.MatchRoot("table_engine_name"),
+						path.MatchRoot("named_collection_name"),
+					)...),
+				},
+			},
+			"table_engine_name": schema.StringAttribute{
+				Optional:    true,
+				Description: "Target table engine for `TABLE ENGINE` privileges. Defaults to all table engines if left null.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
+				Validators: []validator.String{
+					stringvalidator.LengthAtLeast(1),
+					stringvalidator.NoneOf("*"),
+					stringvalidator.ConflictsWith(append(dbTableColumnFields,
+						path.MatchRoot("user_name"),
+						path.MatchRoot("definer_name"),
+						path.MatchRoot("named_collection_name"),
+					)...),
+				},
+			},
+			"named_collection_name": schema.StringAttribute{
+				Optional:    true,
+				Description: "Target named collection for NAMED_COLLECTION-scope privileges. Defaults to all named collections if left null.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
+				Validators: []validator.String{
+					stringvalidator.LengthAtLeast(1),
+					stringvalidator.NoneOf("*"),
+					stringvalidator.ConflictsWith(append(dbTableColumnFields,
+						path.MatchRoot("user_name"),
+						path.MatchRoot("definer_name"),
+						path.MatchRoot("table_engine_name"),
+					)...),
 				},
 			},
 			"grantee_user_name": schema.StringAttribute{
@@ -229,9 +308,9 @@ func (r *Resource) ModifyPlan(ctx context.Context, req resource.ModifyPlanReques
 		case "GLOBAL":
 			if !plan.Database.IsNull() {
 				resp.Diagnostics.AddAttributeError(
-					path.Root("database"),
+					path.Root("database_name"),
 					"Invalid Grant Privilege",
-					fmt.Sprintf("'database' must be null when 'privilege_name' is %q", plan.Privilege.ValueString()),
+					fmt.Sprintf("'database_name' must be null when 'privilege_name' is %q", plan.Privilege.ValueString()),
 				)
 				return
 			}
@@ -242,23 +321,14 @@ func (r *Resource) ModifyPlan(ctx context.Context, req resource.ModifyPlanReques
 		case "VIEW":
 			if plan.Database.IsNull() {
 				resp.Diagnostics.AddAttributeError(
-					path.Root("database"),
+					path.Root("database_name"),
 					"Invalid Grant Privilege",
-					fmt.Sprintf("'database' must be set when privilege_name is %q", plan.Privilege.ValueString()),
+					fmt.Sprintf("'database_name' must be set when privilege_name is %q", plan.Privilege.ValueString()),
 				)
 				return
 			}
-		case "NAMED_COLLECTION":
-			fallthrough
-		case "USER_NAME":
-			fallthrough
-		case "TABLE ENGINE":
-			resp.Diagnostics.AddAttributeError(
-				path.Root("privilege_name"),
-				"Unsupported Privilege",
-				fmt.Sprintf("%q privilege_name is currently unsupported", plan.Privilege.ValueString()),
-			)
-			return
+		case "USER_NAME", "DEFINER", "TABLE_ENGINE", "NAMED_COLLECTION":
+			validateGlobalWithParameterPlan(plan, scope, resp)
 		}
 	}
 }
@@ -272,16 +342,7 @@ func (r *Resource) Create(ctx context.Context, req resource.CreateRequest, resp 
 	}
 
 	upstrGrts := parsedGrants()
-	grant := dbops.GrantPrivilege{
-		AccessType:          plan.Privilege.ValueString(),
-		ExpandedAccessTypes: AllDescendants(upstrGrts.Groups, plan.Privilege.ValueString()),
-		DatabaseName:        plan.Database.ValueStringPointer(),
-		TableName:           plan.Table.ValueStringPointer(),
-		ColumnName:          plan.Column.ValueStringPointer(),
-		GranteeUserName:     plan.GranteeUserName.ValueStringPointer(),
-		GranteeRoleName:     plan.GranteeRoleName.ValueStringPointer(),
-		GrantOption:         plan.GrantOption.ValueBool(),
-	}
+	grant := grantPrivilegeFromModel(plan, upstrGrts.Groups)
 
 	createdGrant, err := r.client.GrantPrivilege(ctx, grant, plan.ClusterName.ValueStringPointer())
 	if err != nil {
@@ -331,14 +392,18 @@ This is a configuration error that prevents further actions. Please note that th
 	}
 
 	state := GrantPrivilege{
-		ClusterName:     plan.ClusterName,
-		Privilege:       types.StringValue(createdGrant.AccessType),
-		Database:        types.StringPointerValue(createdGrant.DatabaseName),
-		Table:           types.StringPointerValue(createdGrant.TableName),
-		Column:          types.StringPointerValue(createdGrant.ColumnName),
-		GranteeUserName: types.StringPointerValue(createdGrant.GranteeUserName),
-		GranteeRoleName: types.StringPointerValue(createdGrant.GranteeRoleName),
-		GrantOption:     types.BoolValue(createdGrant.GrantOption),
+		ClusterName:         plan.ClusterName,
+		Privilege:           types.StringValue(createdGrant.AccessType),
+		Database:            types.StringPointerValue(createdGrant.DatabaseName),
+		Table:               types.StringPointerValue(createdGrant.TableName),
+		Column:              types.StringPointerValue(createdGrant.ColumnName),
+		UserName:            plan.UserName,
+		DefinerName:         plan.DefinerName,
+		TableEngineName:     plan.TableEngineName,
+		NamedCollectionName: plan.NamedCollectionName,
+		GranteeUserName:     types.StringPointerValue(createdGrant.GranteeUserName),
+		GranteeRoleName:     types.StringPointerValue(createdGrant.GranteeRoleName),
+		GrantOption:         types.BoolValue(createdGrant.GrantOption),
 	}
 
 	diags = resp.State.Set(ctx, state)
@@ -357,16 +422,7 @@ func (r *Resource) Read(ctx context.Context, req resource.ReadRequest, resp *res
 	}
 
 	upstrGrts := parsedGrants()
-	grantPrivilege := dbops.GrantPrivilege{
-		AccessType:          state.Privilege.ValueString(),
-		ExpandedAccessTypes: AllDescendants(upstrGrts.Groups, state.Privilege.ValueString()),
-		DatabaseName:        state.Database.ValueStringPointer(),
-		TableName:           state.Table.ValueStringPointer(),
-		ColumnName:          state.Column.ValueStringPointer(),
-		GranteeUserName:     state.GranteeUserName.ValueStringPointer(),
-		GranteeRoleName:     state.GranteeRoleName.ValueStringPointer(),
-		GrantOption:         state.GrantOption.ValueBool(),
-	}
+	grantPrivilege := grantPrivilegeFromModel(state, upstrGrts.Groups)
 
 	grant, err := r.client.GetGrantPrivilege(ctx, &grantPrivilege, state.ClusterName.ValueStringPointer())
 	if err != nil {
@@ -378,10 +434,12 @@ func (r *Resource) Read(ctx context.Context, req resource.ReadRequest, resp *res
 	}
 
 	if grant != nil {
+		scope := upstrGrts.Scopes[state.Privilege.ValueString()]
 		state.Privilege = types.StringValue(grant.AccessType)
 		state.Database = types.StringPointerValue(grant.DatabaseName)
 		state.Table = types.StringPointerValue(grant.TableName)
 		state.Column = types.StringPointerValue(grant.ColumnName)
+		syncAccessObjectFields(&state, grant.AccessObject, scope)
 		state.GranteeUserName = types.StringPointerValue(grant.GranteeUserName)
 		state.GranteeRoleName = types.StringPointerValue(grant.GranteeRoleName)
 		state.GrantOption = types.BoolValue(grant.GrantOption)
@@ -405,7 +463,10 @@ func (r *Resource) Delete(ctx context.Context, req resource.DeleteRequest, resp 
 		return
 	}
 
-	err := r.client.RevokeGrantPrivilege(ctx, state.Privilege.ValueString(), state.Database.ValueStringPointer(), state.Table.ValueStringPointer(), state.Column.ValueStringPointer(), state.GranteeUserName.ValueStringPointer(), state.GranteeRoleName.ValueStringPointer(), state.ClusterName.ValueStringPointer())
+	upstrGrts := parsedGrants()
+	grant := grantPrivilegeFromModel(state, upstrGrts.Groups)
+
+	err := r.client.RevokeGrantPrivilege(ctx, state.Privilege.ValueString(), state.Database.ValueStringPointer(), state.Table.ValueStringPointer(), state.Column.ValueStringPointer(), accessObjectPointer(grant), grant.UsesAccessObject, state.GranteeUserName.ValueStringPointer(), state.GranteeRoleName.ValueStringPointer(), state.ClusterName.ValueStringPointer())
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error Deleting ClickHouse Privilege Grant",
